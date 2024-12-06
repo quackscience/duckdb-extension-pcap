@@ -14,12 +14,6 @@ require pcap_reader
 require icu
 
 # Confirm the extension works
-# Confirm the extension works
-query I
-SELECT count() from pcap_reader('./test.pcap');
-----
-13
-
 query I
 SELECT count(*) as count from pcap_reader('./test.pcap');
 ----
