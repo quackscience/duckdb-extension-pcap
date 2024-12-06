@@ -19,11 +19,15 @@ LOAD pcap_reader;
 SELECT * from pcap_reader('./test.pcap') LIMIT 5;
 ```
 
+<br>
+
 ---
 
-# Development
+<br>
 
-## Dependencies
+## Development
+
+### Dependencies
 In principle, these extensions can be compiled with the Rust toolchain alone. However, this template relies on some additional
 tooling to make life a little easier and to be able to share CI/CD infrastructure with extension templates for other languages:
 
