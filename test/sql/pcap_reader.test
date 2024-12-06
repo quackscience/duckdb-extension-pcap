@@ -4,17 +4,16 @@
 
 # Before we load the extension, this will fail
 statement error
-SELECT rusty_quack('Sam');
+SELECT pcap_reader('/tmp/aaa.pcap');
 ----
-Catalog Error: Scalar Function with name rusty_quack does not exist!
+Catalog Error: Scalar Function with name pcap_reader does not exist!
 
 # Require statement will ensure the extension is loaded from now on
-require rusty_quack
+require pcap_reader
 
 require icu
 
 # Confirm the extension works
 query I
-SELECT * from rusty_quack('Sam');
+SELECT * from pcap_reader('/tmp/aaa.pcap') LIMIT 5;
 ----
-Rusty Quack Sam 🐥
