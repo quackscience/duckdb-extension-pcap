@@ -4,7 +4,7 @@
 
 # Before we load the extension, this will fail
 statement error
-SELECT pcap_reader('/tmp/aaa.pcap');
+SELECT pcap_reader('./test.pcap');
 ----
 Catalog Error: Scalar Function with name pcap_reader does not exist!
 
@@ -15,5 +15,5 @@ require icu
 
 # Confirm the extension works
 query I
-SELECT * from pcap_reader('/tmp/aaa.pcap') LIMIT 5;
+SELECT * from pcap_reader('./test.pcap') LIMIT 5;
 ----
