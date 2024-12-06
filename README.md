@@ -1,7 +1,7 @@
 <img src="https://github.com/user-attachments/assets/46a5c546-7e9b-42c7-87f4-bc8defe674e0" width=250 />
 
 # DuckDB PCAP Community Extension 
-This experimental rust extension allows reading PCAP files from DuckDB
+This experimental rust extension allows reading PCAP files from DuckDB using the [pcap-parser crate](https://crates.io/crates/pcap-parser)
 
 > Experimental: USE AT YOUR OWN RISK!
 
