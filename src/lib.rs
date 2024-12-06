@@ -75,28 +75,39 @@ impl VTab for PcapVTab {
         let init_data = func.get_init_data::<PcapInitData>();
         let reader = unsafe { (*init_data).reader.as_mut() }.unwrap();
         let mut count = 0;
-
         let mut next_result = reader.next();
         while let Err(PcapError::Incomplete(_)) = next_result {
             unsafe { (*init_data).reader.as_mut() }.unwrap().refill()?;
             next_result = unsafe { (*init_data).reader.as_mut() }.unwrap().next();
         }
-
         match next_result {
             Ok((offset, block)) => {
-                let (ts_sec_str, length_str) = match block {
+                let (ts_sec_str, length_str, src_ip, dst_ip) = match block {
                     PcapBlockOwned::Legacy(packet) => {
-                        (packet.ts_sec.to_string(), packet.origlen.to_string())
+                        let mut src = "0.0.0.0".to_string();
+                        let mut dst = "0.0.0.0".to_string();
+                        
+                        if packet.data.len() >= 34 {
+                            let ethertype = u16::from_be_bytes([packet.data[12], packet.data[13]]);
+                            if ethertype == 0x0800 {
+                                src = format!("{}.{}.{}.{}", 
+                                    packet.data[26], packet.data[27], packet.data[28], packet.data[29]);
+                                dst = format!("{}.{}.{}.{}", 
+                                    packet.data[30], packet.data[31], packet.data[32], packet.data[33]);
+                            }
+                        }
+                        
+                        (packet.ts_sec.to_string(), packet.origlen.to_string(), src, dst)
                     },
                     PcapBlockOwned::LegacyHeader(_) => {
-                        ("0".to_string(), "0".to_string())
+                        ("0".to_string(), "0".to_string(), "0.0.0.0".to_string(), "0.0.0.0".to_string())
                     },
-                    _ => ("0".to_string(), "0".to_string()),
+                    _ => ("0".to_string(), "0".to_string(), "0.0.0.0".to_string(), "0.0.0.0".to_string()),
                 };
-
+                
                 output.flat_vector(0).insert(count, CString::new(ts_sec_str)?);
-                output.flat_vector(1).insert(count, CString::new("0.0.0.0")?);
-                output.flat_vector(2).insert(count, CString::new("0.0.0.0")?);
+                output.flat_vector(1).insert(count, CString::new(src_ip)?);
+                output.flat_vector(2).insert(count, CString::new(dst_ip)?);
                 output.flat_vector(3).insert(count, CString::new(length_str)?);
                 
                 count += 1;
