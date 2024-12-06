@@ -16,7 +16,18 @@ LOAD pcap_reader;
 
 ### Example
 ```sql
-SELECT * from pcap_reader('./test.pcap') LIMIT 5;
+D LOAD '/usr/src/duckdb-extension-pcap/build/debug/pcap_reader.duckdb_extension';
+D SELECT * FROM pcap_reader('test/test.pcap') LIMIT 10;
+┌────────────┬────────────────┬────────────────┬──────────┬──────────┬──────────┬─────────┬─────────────────────────────────────────────────┐
+│ timestamp  │     src_ip     │     dst_ip     │ src_port │ dst_port │ protocol │ length  │                     payload                     │
+│  varchar   │    varchar     │    varchar     │ varchar  │ varchar  │ varchar  │ varchar │                     varchar                     │
+├────────────┼────────────────┼────────────────┼──────────┼──────────┼──────────┼─────────┼─────────────────────────────────────────────────┤
+│ 1733513420 │ xx.xx.xx.xxx   │ yyy.yyy.yy.yyy │ 64078    │ 5080     │ UDP      │ 756     │ UTF8: INVITE sip:810442837619024@yyy.yyy.yy.y…  │
+│ 1733513420 │ yyy.yyy.yy.yyy │ xx.xx.xx.xxx   │ 5080     │ 64078    │ UDP      │ 360     │ UTF8: SIP/2.0 100 Trying\r\nVia: SIP/2.0/UDP …  │
+│ 1733513420 │ yyy.yyy.yy.yyy │ xx.xx.xx.xxx   │ 5080     │ 64078    │ UDP      │ 909     │ UTF8: SIP/2.0 480 Temporarily Unavailable\r\n…  │
+├────────────┴────────────────┴────────────────┴──────────┴──────────┴──────────┴─────────┴─────────────────────────────────────────────────┤
+│ 3 rows                                                                                                                          8 columns │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 <br>
