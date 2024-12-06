@@ -1,21 +1,27 @@
-# DuckDB Rust extension template
-This is an **experimental** template for Rust based extensions based on the C Extension API of DuckDB. The goal is to 
-turn this eventually into a stable basis for pure-Rust DuckDB extensions that can be submitted to the Community extensions
-repository
+<img src="https://github.com/user-attachments/assets/46a5c546-7e9b-42c7-87f4-bc8defe674e0" width=250 />
 
-Features:
-- No DuckDB build required
-- No C++ or C code required
-- CI/CD chain preconfigured
-- (Coming soon) Works with community extensions
+# DuckDB PCAP Community Extension 
+This experimental rust extension allows reading PCAP files from DuckDB
 
-## Cloning
+> Experimental: USE AT YOUR OWN RISK!
 
-Clone the repo with submodules
-
-```shell
-git clone --recurse-submodules <repo>
+### 📦 Installation
+```sql
+INSTALL pcap_reader FROM community;
+LOAD pcap_reader;
 ```
+
+#### Table Functions
+- `pcap_reader()`
+
+### Example
+```sql
+SELECT * from pcap_reader('./test.pcap') LIMIT 5;
+```
+
+---
+
+# Development
 
 ## Dependencies
 In principle, these extensions can be compiled with the Rust toolchain alone. However, this template relies on some additional
