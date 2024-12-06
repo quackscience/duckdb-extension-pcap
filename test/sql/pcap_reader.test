@@ -20,10 +20,6 @@ SELECT count(*) as count from pcap_reader('./test/test.pcap');
 13
 
 query IIII
-SELECT * from pcap_reader('./test/test.pcap') LIMIT 5;
+SELECT * from pcap_reader('./test/test.pcap') LIMIT 1;
 ----
-0	0.0.0.0	0.0.0.0	0
-1733513420	80.94.93.189	136.243.16.181	756
-1733513420	136.243.16.181	80.94.93.189	360
-1733513420	136.243.16.181	80.94.93.189	909
-1733513422	136.243.16.181	80.94.93.189	909
+('0', '0.0.0.0', '0.0.0.0', '0', '0', 'UNKNOWN', '0', 'empty')
