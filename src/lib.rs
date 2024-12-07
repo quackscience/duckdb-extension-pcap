@@ -2,6 +2,7 @@ extern crate duckdb;
 extern crate duckdb_loadable_macros;
 extern crate libduckdb_sys;
 extern crate pcap_parser;
+use std::mem::ManuallyDrop;
 
 use duckdb::{
     core::{DataChunkHandle, Inserter, LogicalTypeHandle, LogicalTypeId},
@@ -31,11 +32,9 @@ struct PcapBindData {
 
 #[repr(C)]
 struct PcapInitData {
-    reader: Option<LegacyPcapReader<File>>,
+    reader: Option<ManuallyDrop<LegacyPcapReader<File>>>,
     done: bool,
 }
-
-struct PcapVTab;
 
 impl Free for PcapBindData {
     fn free(&mut self) {
@@ -47,7 +46,14 @@ impl Free for PcapBindData {
     }
 }
 
-impl Free for PcapInitData {}
+struct PcapVTab;
+
+impl Free for PcapInitData {
+    fn free(&mut self) {
+        // Explicitly don't drop the reader to keep file handle alive
+        self.reader = None;
+    }
+}
 
 impl VTab for PcapVTab {
     type InitData = PcapInitData;
@@ -75,9 +81,11 @@ impl VTab for PcapVTab {
         let filepath = unsafe { CStr::from_ptr((*bind_data).filepath).to_str()? };
         let file = File::open(filepath)?;
         debug_print!("Initializing reader for file: {}", filepath);
-        
+    
         unsafe {
-            (*data).reader = Some(LegacyPcapReader::new(65536, file).expect("PcapReader"));
+            (*data).reader = Some(ManuallyDrop::new(
+                LegacyPcapReader::new(65536, file).expect("PcapReader")
+            ));
             (*data).done = false;
         }
         Ok(())
