@@ -81,27 +81,37 @@ impl VTab for PcapVTab {
     }
 
     unsafe fn init(info: &InitInfo, data: *mut PcapInitData) -> Result<(), Box<dyn Error>> {
-        let bind_data = info.get_bind_data::<PcapBindData>();
-        let filepath = unsafe { CStr::from_ptr((*bind_data).filepath).to_str()? };
-        
-        debug_print!("Opening file: {}", filepath);
-        
-        let reader: Box<dyn Read> = if filepath.starts_with("http://") || filepath.starts_with("https://") {
-            debug_print!("Using HTTP reader for {}", filepath);
-            let response = ureq::get(filepath).call()?;
-            Box::new(response.into_reader())
-        } else {
-            debug_print!("Using file reader for {}", filepath);
-            Box::new(File::open(filepath)?)
-        };
+	    let bind_data = info.get_bind_data::<PcapBindData>();
+	    let filepath = unsafe { CStr::from_ptr((*bind_data).filepath).to_str()? };
     
-        unsafe {
-            (*data).reader = Some(ManuallyDrop::new(
-                LegacyPcapReader::new(65536, reader).expect("PcapReader")
-            ));
-            (*data).done = false;
-        }
-        Ok(())
+	    debug_print!("Opening file: {}", filepath);
+    
+	    let reader: Box<dyn Read> = if filepath.starts_with("http://") || filepath.starts_with("https://") {
+	        debug_print!("Using HTTP reader for {}", filepath);
+        
+	        // Configure ureq agent with reasonable defaults
+	        let agent = ureq::AgentBuilder::new()
+	            .timeout_read(std::time::Duration::from_secs(300))  // 5 minutes for large files
+	            .timeout_write(std::time::Duration::from_secs(30))
+	            .build();
+
+	        let response = agent.get(filepath)
+	            .set("User-Agent", "duckdb-pcap-reader/1.0")
+	            .call()?;
+	
+	        Box::new(response.into_reader())
+	    } else {
+	        debug_print!("Using file reader for {}", filepath);
+	        Box::new(File::open(filepath)?)
+	    };
+
+	    unsafe {
+	        (*data).reader = Some(ManuallyDrop::new(
+	            LegacyPcapReader::new(65536, reader).expect("PcapReader")
+	        ));
+	        (*data).done = false;
+	    }
+	    Ok(())
     }
 
     unsafe fn func(func: &FunctionInfo, output: &mut DataChunkHandle) -> Result<(), Box<dyn Error>> {
