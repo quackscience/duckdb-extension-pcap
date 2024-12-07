@@ -11,13 +11,9 @@ INSTALL pcap_reader FROM community;
 LOAD pcap_reader;
 ```
 
-#### Table Functions
-- `pcap_reader()`
-
 ### Example
 ```sql
-D LOAD '/usr/src/duckdb-extension-pcap/build/debug/pcap_reader.duckdb_extension';
-D SELECT * FROM pcap_reader('test/test.pcap') LIMIT 10;
+D SELECT * FROM pcap_reader('test/test.pcap') LIMIT 3;
 ┌────────────┬────────────────┬────────────────┬──────────┬──────────┬──────────┬─────────┬─────────────────────────────────────────────────┐
 │ timestamp  │     src_ip     │     dst_ip     │ src_port │ dst_port │ protocol │ length  │                     payload                     │
 │  varchar   │    varchar     │    varchar     │ varchar  │ varchar  │ varchar  │ varchar │                     varchar                     │
