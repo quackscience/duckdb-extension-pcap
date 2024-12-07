@@ -2,7 +2,6 @@ extern crate duckdb;
 extern crate duckdb_loadable_macros;
 extern crate libduckdb_sys;
 extern crate pcap_parser;
-extern crate ureq;
 
 use std::mem::ManuallyDrop;
 
@@ -19,7 +18,7 @@ use std::{
     error::Error,
     ffi::{c_char, CStr, CString},
     fs::File,
-    io::Read,
+    io::{Read,Cursor},
 };
 
 macro_rules! debug_print {
@@ -89,17 +88,17 @@ impl VTab for PcapVTab {
 	    let reader: Box<dyn Read> = if filepath.starts_with("http://") || filepath.starts_with("https://") {
 	        debug_print!("Using HTTP reader for {}", filepath);
         
-	        // Configure ureq agent with reasonable defaults
-	        let agent = ureq::AgentBuilder::new()
-	            .timeout_read(std::time::Duration::from_secs(300))  // 5 minutes for large files
-	            .timeout_write(std::time::Duration::from_secs(30))
-	            .build();
+	        // Create a channel to receive the response
+	        let (tx, rx) = std::sync::mpsc::channel();
+        
+	        let request = ehttp::Request::get(filepath);
+	        ehttp::fetch(request, move |result: ehttp::Result<ehttp::Response>| {
+	            tx.send(result).unwrap();
+	        });
 
-	        let response = agent.get(filepath)
-	            .set("User-Agent", "duckdb-pcap-reader/1.0")
-	            .call()?;
-	
-	        Box::new(response.into_reader())
+	        // Wait for the response
+	        let response = rx.recv()?.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+	        Box::new(Cursor::new(response.bytes))
 	    } else {
 	        debug_print!("Using file reader for {}", filepath);
 	        Box::new(File::open(filepath)?)
