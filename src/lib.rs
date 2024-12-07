@@ -121,13 +121,13 @@ impl VTab for PcapVTab {
                     let payload_str = if !payload.is_empty() {
                         if let Ok(utf8_str) = std::str::from_utf8(&payload) {
                             if utf8_str.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) {
-                                format!("UTF8: {}", utf8_str)
+                                format!("{}", utf8_str)
                             } else {
                                 let hex_str: Vec<String> = payload.iter()
                                     .take(32)
                                     .map(|b| format!("{:02x}", b))
                                     .collect();
-                                format!("HEX: {}{}", hex_str.join(" "), 
+                                format!("{}{}", hex_str.join(" "), 
                                     if payload.len() > 32 { " ..." } else { "" })
                             }
                         } else {
@@ -135,7 +135,7 @@ impl VTab for PcapVTab {
                                 .take(32)
                                 .map(|b| format!("{:02x}", b))
                                 .collect();
-                            format!("HEX: {}{}", hex_str.join(" "), 
+                            format!("{}{}", hex_str.join(" "), 
                                 if payload.len() > 32 { " ..." } else { "" })
                         }
                     } else {
