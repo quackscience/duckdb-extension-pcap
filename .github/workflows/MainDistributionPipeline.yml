@@ -4,6 +4,8 @@
 name: Main Extension Distribution Pipeline
 on:
   push:
+    paths-ignore:
+      - '**/*.md'
   pull_request:
   workflow_dispatch:
 
