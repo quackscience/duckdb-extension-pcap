@@ -63,7 +63,7 @@ impl VTab for PcapVTab {
     type BindData = PcapBindData;
 
     unsafe fn bind(bind: &BindInfo, data: *mut PcapBindData) -> Result<(), Box<dyn Error>> {
-        bind.add_result_column("timestamp", LogicalTypeHandle::from(LogicalTypeId::Varchar));
+        bind.add_result_column("timestamp", LogicalTypeHandle::from(LogicalTypeId::Timestamp));
         bind.add_result_column("src_ip", LogicalTypeHandle::from(LogicalTypeId::Varchar));
         bind.add_result_column("dst_ip", LogicalTypeHandle::from(LogicalTypeId::Varchar));
         bind.add_result_column("src_port", LogicalTypeHandle::from(LogicalTypeId::Integer));
@@ -158,7 +158,7 @@ impl VTab for PcapVTab {
                 debug_print!("Processing packet: timestamp={}, src={}:{}, dst={}:{}, proto={}, len={}",
                     timestamp, src_ip, src_port, dst_ip, dst_port, protocol, length_str);
                 
-                output.flat_vector(0).insert(count, CString::new(timestamp.to_string())?);
+                output.flat_vector(0).as_mut_slice::<i64>()[0] = timestamp as i64;
                 output.flat_vector(1).insert(count, CString::new(src_ip)?);
                 output.flat_vector(2).insert(count, CString::new(dst_ip)?);
                 output.flat_vector(3).as_mut_slice::<i32>()[0] = src_port as i32;
