@@ -66,10 +66,10 @@ impl VTab for PcapVTab {
         bind.add_result_column("timestamp", LogicalTypeHandle::from(LogicalTypeId::Varchar));
         bind.add_result_column("src_ip", LogicalTypeHandle::from(LogicalTypeId::Varchar));
         bind.add_result_column("dst_ip", LogicalTypeHandle::from(LogicalTypeId::Varchar));
-        bind.add_result_column("src_port", LogicalTypeHandle::from(LogicalTypeId::Varchar));
-        bind.add_result_column("dst_port", LogicalTypeHandle::from(LogicalTypeId::Varchar));
+        bind.add_result_column("src_port", LogicalTypeHandle::from(LogicalTypeId::Integer));
+        bind.add_result_column("dst_port", LogicalTypeHandle::from(LogicalTypeId::Integer));
         bind.add_result_column("protocol", LogicalTypeHandle::from(LogicalTypeId::Varchar));
-        bind.add_result_column("length", LogicalTypeHandle::from(LogicalTypeId::Varchar));
+        bind.add_result_column("length", LogicalTypeHandle::from(LogicalTypeId::Integer));
         bind.add_result_column("payload", LogicalTypeHandle::from(LogicalTypeId::Varchar));
 
         let filepath = bind.get_parameter(0).to_string();
@@ -161,11 +161,10 @@ impl VTab for PcapVTab {
                 output.flat_vector(0).insert(count, CString::new(timestamp.to_string())?);
                 output.flat_vector(1).insert(count, CString::new(src_ip)?);
                 output.flat_vector(2).insert(count, CString::new(dst_ip)?);
-                output.flat_vector(3).insert(count, CString::new(src_port.to_string())?);
-                output.flat_vector(4).insert(count, CString::new(dst_port.to_string())?);
+                output.flat_vector(3).as_mut_slice::<i32>()[0] = src_port as i32;
+                output.flat_vector(4).as_mut_slice::<i32>()[0] = dst_port as i32;
                 output.flat_vector(5).insert(count, CString::new(protocol)?);
-                output.flat_vector(6).insert(count, CString::new(length_str)?);
-                
+                output.flat_vector(6).as_mut_slice::<i32>()[0] = length_str.parse::<i32>().unwrap();
 
 		let payload_str = if !payload.is_empty() {
 		    if let Ok(utf8_str) = std::str::from_utf8(&payload) {
