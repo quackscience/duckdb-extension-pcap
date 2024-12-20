@@ -275,8 +275,58 @@ impl PcapVTab {
                     payload = data[payload_start..].to_vec();
                 }
                 
-            } else if ethertype == 0x86DD {
-                protocol = String::from("IPv6");
+            } else if ethertype == 0x86DD && data.len() >= 54 {
+                src_ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", 
+                    u16::from_be_bytes([data[22], data[23]]),
+                    u16::from_be_bytes([data[24], data[25]]),
+                    u16::from_be_bytes([data[26], data[27]]),
+                    u16::from_be_bytes([data[28], data[29]]),
+                    u16::from_be_bytes([data[30], data[31]]),
+                    u16::from_be_bytes([data[32], data[33]]),
+                    u16::from_be_bytes([data[34], data[35]]),
+                    u16::from_be_bytes([data[36], data[37]]));
+                dst_ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", 
+                    u16::from_be_bytes([data[38], data[39]]),
+                    u16::from_be_bytes([data[40], data[41]]),
+                    u16::from_be_bytes([data[42], data[43]]),
+                    u16::from_be_bytes([data[44], data[45]]),
+                    u16::from_be_bytes([data[46], data[47]]),
+                    u16::from_be_bytes([data[48], data[49]]),
+                    u16::from_be_bytes([data[50], data[51]]),
+                    u16::from_be_bytes([data[52], data[53]]));
+                
+                let ip_protocol = data[20];
+                debug_print!("IP Protocol: {}", ip_protocol);
+                
+                let transport_header_start = 54;
+                
+                match ip_protocol {
+                    6 => {
+                        protocol = String::from("TCP");
+                        if data.len() >= transport_header_start + 4 {
+                            src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
+                            dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
+                        }
+                    },
+                    17 => {
+                        protocol = String::from("UDP");
+                        if data.len() >= transport_header_start + 4 {
+                            src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
+                            dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
+                        }
+                    },
+                    _ => protocol = format!("IP({})", ip_protocol),
+                }
+                
+                let payload_start = transport_header_start + match ip_protocol {
+                    6 => 20,
+                    17 => 8,
+                    _ => 0,
+                };
+                
+                if data.len() > payload_start {
+                    payload = data[payload_start..].to_vec();
+                }
             }
         }
 
