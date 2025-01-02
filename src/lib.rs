@@ -219,6 +219,8 @@ impl VTab for PcapVTab {
 }
 
 impl PcapVTab {
+    // parse_packet
+    // Return the source IP, destination IP, source port, destination port, protocol, payload
     fn parse_packet(data: &[u8]) -> Result<(String, String, u16, u16, String, Vec<u8>), Box<dyn Error>> {
         let mut src_ip = String::from("0.0.0.0");
         let mut dst_ip = String::from("0.0.0.0");
@@ -229,107 +231,130 @@ impl PcapVTab {
 
         debug_print!("Parsing packet of length: {}", data.len());
 
+        // Check if we have enough data to parse the Ethernet header
         if data.len() >= 14 {
+
             let ethertype = u16::from_be_bytes([data[12], data[13]]);
             debug_print!("Ethertype: 0x{:04x}", ethertype);
 
-	    // IPv4 Parsing
+            // Check if the packet is IPv4 and we have enough data to parse the IP header
             if ethertype == 0x0800 && data.len() >= 34 {
+
                 let ip_header_len = (data[14] & 0x0f) * 4;
                 debug_print!("IP header length: {}", ip_header_len);
-                
+            
                 src_ip = format!("{}.{}.{}.{}", 
                     data[26], data[27], data[28], data[29]);
                 dst_ip = format!("{}.{}.{}.{}", 
                     data[30], data[31], data[32], data[33]);
-                
+            
                 let ip_protocol = data[23];
                 debug_print!("IP Protocol: {}", ip_protocol);
-                
+            
                 let transport_header_start = 14 + ip_header_len as usize;
-                
+            
+                // Check if we have enough data to parse the transport header
                 match ip_protocol {
-                    6 => {
-                        protocol = String::from("TCP");
-                        if data.len() >= transport_header_start + 4 {
-                            src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
-                            dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
-                        }
-                    },
-                    17 => {
-                        protocol = String::from("UDP");
-                        if data.len() >= transport_header_start + 4 {
-                            src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
-                            dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
-                        }
-                    },
-                    _ => protocol = format!("IP({})", ip_protocol),
-                }
-                
-                let payload_start = transport_header_start + match ip_protocol {
-                    6 => 20,
-                    17 => 8,
-                    _ => 0,
-                };
-                
-                if data.len() > payload_start {
-                    payload = data[payload_start..].to_vec();
-                }
-                
+                6 => {
+                    protocol = String::from("TCP");
+                    if data.len() >= transport_header_start + 4 {
+                        src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
+                        debug_print!("TCP Source Port: {}", src_port);
+                        dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
+                        debug_print!("TCP Destination Port: {}", dst_port);
+                    }
+                },
+                17 => {
+                    protocol = String::from("UDP");
+                    if data.len() >= transport_header_start + 4 {
+                        src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
+                        debug_print!("UDP Source Port: {}", src_port);
+                        dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
+                        debug_print!("UDP Destination Port: {}", dst_port);
+                    }
+                },
+                _ => protocol = format!("IP({})", ip_protocol),
             }
-	    // IPv6 Parsing
-	    else if ethertype == 0x86DD && data.len() >= 54 {
-                src_ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", 
-                    u16::from_be_bytes([data[22], data[23]]),
-                    u16::from_be_bytes([data[24], data[25]]),
-                    u16::from_be_bytes([data[26], data[27]]),
-                    u16::from_be_bytes([data[28], data[29]]),
-                    u16::from_be_bytes([data[30], data[31]]),
-                    u16::from_be_bytes([data[32], data[33]]),
-                    u16::from_be_bytes([data[34], data[35]]),
-                    u16::from_be_bytes([data[36], data[37]]));
-                dst_ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", 
-                    u16::from_be_bytes([data[38], data[39]]),
-                    u16::from_be_bytes([data[40], data[41]]),
-                    u16::from_be_bytes([data[42], data[43]]),
-                    u16::from_be_bytes([data[44], data[45]]),
-                    u16::from_be_bytes([data[46], data[47]]),
-                    u16::from_be_bytes([data[48], data[49]]),
-                    u16::from_be_bytes([data[50], data[51]]),
-                    u16::from_be_bytes([data[52], data[53]]));
+            
+            // Calculate the start of the payload
+            let payload_start = transport_header_start + match ip_protocol {
+                6 => 20, // TCP: 20 bytes
+                17 => 8, // UDP: 8 bytes
+                _ => 0, 
+            };
+            
+            // Copy the payload data
+            if data.len() > payload_start {
+                payload = data[payload_start..].to_vec();
+            }
+            
+            // Check if the packet is IPv6 and we have enough data to parse the IP header
+            } 
+            else if ethertype == 0x86DD && data.len() >= 54 {
+            
+            let ip_header_len = 54;
+            debug_print!("IPv6 header length: {}", ip_header_len);
 
-                let next_header = data[20];
-                debug_print!("Next Header: {}", next_header);
+            src_ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", 
+                u16::from_be_bytes([data[22], data[23]]),
+                u16::from_be_bytes([data[24], data[25]]),
+                u16::from_be_bytes([data[26], data[27]]),
+                u16::from_be_bytes([data[28], data[29]]),
+                u16::from_be_bytes([data[30], data[31]]),
+                u16::from_be_bytes([data[32], data[33]]),
+                u16::from_be_bytes([data[34], data[35]]),
+                u16::from_be_bytes([data[36], data[37]]));
+            dst_ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", 
+                u16::from_be_bytes([data[38], data[39]]),
+                u16::from_be_bytes([data[40], data[41]]),
+                u16::from_be_bytes([data[42], data[43]]),
+                u16::from_be_bytes([data[44], data[45]]),
+                u16::from_be_bytes([data[46], data[47]]),
+                u16::from_be_bytes([data[48], data[49]]),
+                u16::from_be_bytes([data[50], data[51]]),
+                u16::from_be_bytes([data[52], data[53]]));
 
-                let transport_header_start = 54; // IPv6 header is 40 bytes
+            let ip_protocol = data[20];
+            debug_print!("IP protocol: {}", ip_protocol);
 
-                match next_header {
-                    6 => {
-                        protocol = String::from("TCP");
-                        if data.len() >= transport_header_start + 4 {
-                            src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
-                            dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
-                        }
-                    },
-                    17 => {
-                        protocol = String::from("UDP");
-                        if data.len() >= transport_header_start + 4 {
-                            src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
-                            dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
-                        }
-                    },
-                    _ => protocol = format!("IPv6({})", next_header),
-                }
+            let transport_header_start = ip_header_len; // IPv6 header is fixed size 54 bytes
+            
+            // Check if we have enough data to parse the transport header
+            match ip_protocol {
+                6 => {
+                    protocol = String::from("TCP");
+                    if data.len() >= transport_header_start + 4 {
+                        src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
+                        dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
+                    }
+                },
+                17 => {
+                    protocol = String::from("UDP");
+                    if data.len() >= transport_header_start + 4 {
+                        src_port = u16::from_be_bytes([data[transport_header_start], data[transport_header_start + 1]]);
+                        dst_port = u16::from_be_bytes([data[transport_header_start + 2], data[transport_header_start + 3]]);
+                    }
+                },
+                _ => protocol = format!("IPv6({})", ip_protocol),
+            }
 
-                if data.len() > transport_header_start {
-                    payload = data[transport_header_start..].to_vec();
-                }
+            // Calculate the start of the payload
+            let payload_start = transport_header_start + match ip_protocol {
+                6 => 20, // TCP: 20 bytes
+                17 => 8, // UDP: 8 bytes
+                _ => 0, 
+            };
+
+            // Copy the payload data
+            if data.len() > payload_start {
+                payload = data[payload_start..].to_vec();
+            }
             }
         }
 
         debug_print!("Parsed packet: {}:{} -> {}:{} ({})", 
-            src_ip, src_port, dst_ip, dst_port, protocol);
-        
+        src_ip, src_port, dst_ip, dst_port, protocol);
+    
         Ok((src_ip, dst_ip, src_port, dst_port, protocol, payload))
     }
 }
