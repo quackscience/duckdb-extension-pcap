@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 # crate-type = ["cdylib"]
-crate-type = ["staticlib"]
+crate-type = ["staticlib","cdylib"]
 
 [profile.release]
 lto = true
@@ -18,7 +18,7 @@ strip = true
 # actual linking will be done via emcc
 name = "pcap_reader"
 path = "src/wasm_lib.rs"
-crate-type = ["staticlib"]
+crate-type = ["staticlib","cdylib"]
 
 [dependencies]
 duckdb = { version = "1.1.1", features = ["vtab-loadable"] }
