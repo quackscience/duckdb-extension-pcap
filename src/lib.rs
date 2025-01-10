@@ -390,7 +390,7 @@ impl PcapVTab {
     }
 }
 
-#[duckdb_entrypoint_c_api(ext_name = "pcap_reader", min_duckdb_version = "v0.0.1")]
+#[duckdb_entrypoint_c_api(ext_name = "pcap_reader", min_duckdb_version = "v1.2.0")]
 pub unsafe fn extension_entrypoint(con: Connection) -> Result<(), Box<dyn Error>> {
     con.register_table_function::<PcapVTab>("pcap_reader")
         .expect("Failed to register pcap_reader function");
