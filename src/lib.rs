@@ -71,7 +71,10 @@ impl VTab for PcapVTab {
         bind.add_result_column("dst_ip", LogicalTypeHandle::from(LogicalTypeId::Varchar));
         bind.add_result_column("src_port", LogicalTypeHandle::from(LogicalTypeId::Integer));
         bind.add_result_column("dst_port", LogicalTypeHandle::from(LogicalTypeId::Integer));
-        bind.add_result_column("protocol", LogicalTypeHandle::from(LogicalTypeId::Varchar));
+        bind.add_result_column(
+            "L4 protocol",
+            LogicalTypeHandle::from(LogicalTypeId::Varchar),
+        );
         bind.add_result_column("length", LogicalTypeHandle::from(LogicalTypeId::Integer));
         bind.add_result_column("payload", LogicalTypeHandle::from(LogicalTypeId::Varchar));
 
@@ -82,6 +85,7 @@ impl VTab for PcapVTab {
         Ok(())
     }
 
+    // Initialize the VTab
     unsafe fn init(info: &InitInfo, data: *mut PcapInitData) -> Result<(), Box<dyn Error>> {
         let bind_data = info.get_bind_data::<PcapBindData>();
         let filepath = unsafe { CStr::from_ptr((*bind_data).filepath).to_str()? };
@@ -134,9 +138,11 @@ impl VTab for PcapVTab {
 
         let mut count = 0;
 
+        // Read packets from the pcap file
         'read_loop: loop {
             let next_result = unsafe { (*init_data).reader.as_mut().unwrap().next() };
 
+            // Handle the next packet
             let (offset, block) = match next_result {
                 Ok(result) => result,
                 Err(PcapError::Incomplete(_)) => {
@@ -155,10 +161,13 @@ impl VTab for PcapVTab {
                 Err(e) => return Err(Box::new(e)),
             };
 
+            // Process the block
             match block {
+              
+                // Handle the packet
                 PcapBlockOwned::Legacy(packet) => {
                     let parsed = Self::parse_packet(&packet.data)?;
-                    let (src_ip, dst_ip, src_port, dst_port, protocol, payload) = parsed;
+                    let (src_ip, dst_ip, src_port, dst_port, l4_protocol, payload) = parsed;
                     let timestamp_micros = packet.ts_sec as i64 * 1_000_000 + packet.ts_usec as i64;
 
                     debug_print!(
@@ -168,7 +177,7 @@ impl VTab for PcapVTab {
                         src_port,
                         dst_ip,
                         dst_port,
-                        protocol,
+                        l4_protocol,
                         packet.origlen
                     );
 
@@ -177,7 +186,7 @@ impl VTab for PcapVTab {
                     output.flat_vector(2).insert(count, CString::new(dst_ip)?);
                     output.flat_vector(3).as_mut_slice::<i32>()[0] = src_port as i32;
                     output.flat_vector(4).as_mut_slice::<i32>()[0] = dst_port as i32;
-                    output.flat_vector(5).insert(count, CString::new(protocol)?);
+                    output.flat_vector(5).insert(count, CString::new(l4_protocol)?);
                     output.flat_vector(6).as_mut_slice::<i32>()[0] = packet.origlen as i32;
 
                     let payload_str = if !payload.is_empty() {
@@ -225,6 +234,8 @@ impl VTab for PcapVTab {
                     }
                     break 'read_loop;
                 }
+
+                // Skip non-packet blocks
                 PcapBlockOwned::LegacyHeader(_) | _ => {
                     unsafe {
                         (*init_data).reader.as_mut().unwrap().consume(offset);
@@ -233,7 +244,7 @@ impl VTab for PcapVTab {
                 }
             }
         }
-
+        // Set the number of rows in the output
         output.set_len(count);
         Ok(())
     }
@@ -244,6 +255,10 @@ impl VTab for PcapVTab {
 }
 
 impl PcapVTab {
+    /*
+    function parse_packet
+    Return the source IP, destination IP, source port, destination port, L4 protocol, payload
+    */
     fn parse_packet(
         data: &[u8],
     ) -> Result<(String, String, u16, u16, String, Vec<u8>), Box<dyn Error>> {
@@ -251,15 +266,20 @@ impl PcapVTab {
         let mut dst_ip = String::from("0.0.0.0");
         let mut src_port = 0;
         let mut dst_port = 0;
-        let mut protocol = String::from("UNKNOWN");
+        let mut l4_protocol = String::from("UNKNOWN");
         let mut payload = Vec::new();
 
         debug_print!("Parsing packet of length: {}", data.len());
 
+        // Parse the Ethernet header
         if data.len() >= 14 {
             let ethertype = u16::from_be_bytes([data[12], data[13]]);
             debug_print!("Ethertype: 0x{:04x}", ethertype);
 
+            let mut transport_header_start = 0;
+            let mut ip_protocol = 0;
+
+            // Parse the IP header
             if ethertype == 0x0800 && data.len() >= 34 {
                 let ip_header_len = (data[14] & 0x0f) * 4;
                 debug_print!("IP header length: {}", ip_header_len);
@@ -267,66 +287,106 @@ impl PcapVTab {
                 src_ip = format!("{}.{}.{}.{}", data[26], data[27], data[28], data[29]);
                 dst_ip = format!("{}.{}.{}.{}", data[30], data[31], data[32], data[33]);
 
-                let ip_protocol = data[23];
+                ip_protocol = data[23];
                 debug_print!("IP Protocol: {}", ip_protocol);
 
-                let transport_header_start = 14 + ip_header_len as usize;
+                transport_header_start = 14 + ip_header_len as usize;
+            }
+            // Parse the IPv6 header
+            else if ethertype == 0x86DD && data.len() >= 54 {
+                let ip_header_len = 54;
+                debug_print!("IPv6 header length: {}", ip_header_len);
 
-                match ip_protocol {
-                    6 => {
-                        protocol = String::from("TCP");
-                        if data.len() >= transport_header_start + 4 {
-                            src_port = u16::from_be_bytes([
-                                data[transport_header_start],
-                                data[transport_header_start + 1],
-                            ]);
-                            dst_port = u16::from_be_bytes([
-                                data[transport_header_start + 2],
-                                data[transport_header_start + 3],
-                            ]);
-                        }
+                src_ip = format!(
+                    "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+                    u16::from_be_bytes([data[22], data[23]]),
+                    u16::from_be_bytes([data[24], data[25]]),
+                    u16::from_be_bytes([data[26], data[27]]),
+                    u16::from_be_bytes([data[28], data[29]]),
+                    u16::from_be_bytes([data[30], data[31]]),
+                    u16::from_be_bytes([data[32], data[33]]),
+                    u16::from_be_bytes([data[34], data[35]]),
+                    u16::from_be_bytes([data[36], data[37]])
+                );
+                dst_ip = format!(
+                    "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+                    u16::from_be_bytes([data[38], data[39]]),
+                    u16::from_be_bytes([data[40], data[41]]),
+                    u16::from_be_bytes([data[42], data[43]]),
+                    u16::from_be_bytes([data[44], data[45]]),
+                    u16::from_be_bytes([data[46], data[47]]),
+                    u16::from_be_bytes([data[48], data[49]]),
+                    u16::from_be_bytes([data[50], data[51]]),
+                    u16::from_be_bytes([data[52], data[53]])
+                );
+
+                ip_protocol = data[20];
+                debug_print!("IP protocol: {}", ip_protocol);
+
+                transport_header_start = ip_header_len as usize;
+            }
+
+            // Parse the transport header
+            match ip_protocol {
+                6 => {
+                    l4_protocol = String::from("TCP");
+                    if data.len() >= transport_header_start + 4 {
+                        src_port = u16::from_be_bytes([
+                            data[transport_header_start],
+                            data[transport_header_start + 1],
+                        ]);
+                        debug_print!("TCP Source Port: {}", src_port);
+                        dst_port = u16::from_be_bytes([
+                            data[transport_header_start + 2],
+                            data[transport_header_start + 3],
+                        ]);
+                        debug_print!("TCP Destination Port: {}", dst_port);
                     }
-                    17 => {
-                        protocol = String::from("UDP");
-                        if data.len() >= transport_header_start + 4 {
-                            src_port = u16::from_be_bytes([
-                                data[transport_header_start],
-                                data[transport_header_start + 1],
-                            ]);
-                            dst_port = u16::from_be_bytes([
-                                data[transport_header_start + 2],
-                                data[transport_header_start + 3],
-                            ]);
-                        }
+                }
+                17 => {
+                    l4_protocol = String::from("UDP");
+                    if data.len() >= transport_header_start + 4 {
+                        src_port = u16::from_be_bytes([
+                            data[transport_header_start],
+                            data[transport_header_start + 1],
+                        ]);
+                        debug_print!("UDP Source Port: {}", src_port);
+                        dst_port = u16::from_be_bytes([
+                            data[transport_header_start + 2],
+                            data[transport_header_start + 3],
+                        ]);
+                        debug_print!("UDP Destination Port: {}", dst_port);
                     }
-                    _ => protocol = format!("IP({})", ip_protocol),
                 }
+                _ => l4_protocol = format!("IP({})", ip_protocol),
+            }
 
-                let payload_start = transport_header_start
-                    + match ip_protocol {
-                        6 => 20,
-                        17 => 8,
-                        _ => 0,
-                    };
+            // Parse the payload
+            let payload_start = transport_header_start
+                + match ip_protocol {
+                    6 => 20,
+                    17 => 8,
+                    _ => 0,
+                };
 
-                if data.len() > payload_start {
-                    payload = data[payload_start..].to_vec();
-                }
-            } else if ethertype == 0x86DD {
-                protocol = String::from("IPv6");
+            // Copy the payload
+            if data.len() > payload_start {
+                payload = data[payload_start..].to_vec();
             }
         }
 
+        // Print the parsed packet
         debug_print!(
             "Parsed packet: {}:{} -> {}:{} ({})",
             src_ip,
             src_port,
             dst_ip,
             dst_port,
-            protocol
+            l4_protocol
         );
 
-        Ok((src_ip, dst_ip, src_port, dst_port, protocol, payload))
+        // Return the parsed packet
+        Ok((src_ip, dst_ip, src_port, dst_port, l4_protocol, payload))
     }
 }
 
