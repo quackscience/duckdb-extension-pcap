@@ -4,8 +4,8 @@ version = "0.1.1"
 edition = "2021"
 
 [lib]
-# crate-type = ["cdylib"]
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["cdylib"]
+# crate-type = ["staticlib", "cdylib"]
 
 [profile.release]
 lto = true
