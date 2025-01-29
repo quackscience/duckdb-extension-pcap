@@ -22,4 +22,4 @@ jobs:
       ci_tools_version: main
       extension_name: pcap_reader
       extra_toolchains: rust;python3
-      exclude_archs: 'windows_amd64_rtools;windows_amd64'
+      exclude_archs: 'linux_amd64_musl'

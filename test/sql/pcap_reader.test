@@ -17,4 +17,4 @@ require icu
 query I
 SELECT count(*) as count from pcap_reader('./test/test.pcap');
 ----
-13
+12

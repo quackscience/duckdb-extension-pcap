@@ -163,6 +163,7 @@ impl VTab for PcapVTab {
 
             // Process the block
             match block {
+              
                 // Handle the packet
                 PcapBlockOwned::Legacy(packet) => {
                     let parsed = Self::parse_packet(&packet.data)?;
@@ -185,9 +186,7 @@ impl VTab for PcapVTab {
                     output.flat_vector(2).insert(count, CString::new(dst_ip)?);
                     output.flat_vector(3).as_mut_slice::<i32>()[0] = src_port as i32;
                     output.flat_vector(4).as_mut_slice::<i32>()[0] = dst_port as i32;
-                    output
-                        .flat_vector(5)
-                        .insert(count, CString::new(l4_protocol)?);
+                    output.flat_vector(5).insert(count, CString::new(l4_protocol)?);
                     output.flat_vector(6).as_mut_slice::<i32>()[0] = packet.origlen as i32;
 
                     let payload_str = if !payload.is_empty() {
@@ -235,6 +234,7 @@ impl VTab for PcapVTab {
                     }
                     break 'read_loop;
                 }
+
                 // Skip non-packet blocks
                 PcapBlockOwned::LegacyHeader(_) | _ => {
                     unsafe {
