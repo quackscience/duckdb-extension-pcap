@@ -396,3 +396,112 @@ pub unsafe fn extension_entrypoint(con: Connection) -> Result<(), Box<dyn Error>
         .expect("Failed to register pcap_reader function");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper function to create a simple IPv4 packet
+    fn create_ipv4_tcp_packet() -> Vec<u8> {
+        let packet = vec![
+            // Ethernet header (14 bytes)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Destination MAC
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Source MAC
+            0x08, 0x00, // IPv4 EtherType
+            // IPv4 header (20 bytes)
+            0x45, 0x00, // Version & IHL, DSCP & ECN
+            0x00, 0x28, // Total Length
+            0x00, 0x00, 0x00, 0x00, // ID, Flags, Fragment Offset
+            0x40, 0x06, // TTL, Protocol (6 = TCP)
+            0x00, 0x00, // Header Checksum
+            192, 168, 1, 100, // Source IP (192.168.1.100)
+            10, 0, 0, 1, // Destination IP (10.0.0.1)
+            // TCP header (20 bytes)
+            0x12, 0x34, // Source Port (4660)
+            0x45, 0x67, // Destination Port (17767)
+            0x00, 0x00, 0x00, 0x00, // Sequence Number
+            0x00, 0x00, 0x00, 0x00, // Acknowledgment Number
+            0x50, 0x00, // Data Offset & Flags
+            0x00, 0x00, // Window Size
+            0x00, 0x00, // Checksum
+            0x00, 0x00, // Urgent Pointer
+            // Payload
+            0x48, 0x65, 0x6c, 0x6c, 0x6f, // "Hello" in ASCII
+        ];
+        packet
+    }
+
+    // Helper function to create a simple IPv6 packet
+    fn create_ipv6_udp_packet() -> Vec<u8> {
+        let packet = vec![
+            // Ethernet header (14 bytes)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Destination MAC
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Source MAC
+            0x86, 0xDD, // IPv6 EtherType
+            // IPv6 header (40 bytes)
+            0x60, 0x00, 0x00, 0x00, // Version, Traffic Class, Flow Label
+            0x00, 0x08, // Payload Length
+            17, 0x40, // Next Header (17 = UDP), Hop Limit
+            0x20, 0x01, 0x0d, 0xb8, // Source IP (2001:db8::1)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x20, 0x01,
+            0x0d, 0xb8, // Destination IP (2001:db8::2)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+            // UDP header (8 bytes)
+            0x89, 0x13, // Source Port (35091)
+            0x12, 0x34, // Destination Port (4660)
+            0x00, 0x08, // Length
+            0x00, 0x00, // Checksum
+            // Payload
+            0x54, 0x65, 0x73, 0x74, // "Test" in ASCII
+        ];
+        packet
+    }
+
+    #[test]
+    fn test_parse_ipv4_tcp_packet() {
+        let packet = create_ipv4_tcp_packet();
+        let result = PcapVTab::parse_packet(&packet).unwrap();
+
+        assert_eq!(result.0, "192.168.1.100"); // Source IP
+        assert_eq!(result.1, "10.0.0.1"); // Destination IP
+        assert_eq!(result.2, 4660); // Source Port
+        assert_eq!(result.3, 17767); // Destination Port
+        assert_eq!(result.4, "TCP"); // Protocol
+        assert_eq!(result.5, b"Hello"); // Payload
+    }
+
+    #[test]
+    fn test_parse_ipv6_udp_packet() {
+        let packet = create_ipv6_udp_packet();
+        let result = PcapVTab::parse_packet(&packet).unwrap();
+
+        assert_eq!(result.0, "2001:db8:0:0:0:0:0:1"); // Source IP
+        assert_eq!(result.1, "2001:db8:0:0:0:0:0:2"); // Destination IP
+        assert_eq!(result.2, 35091); // Source Port
+        assert_eq!(result.3, 4660); // Destination Port
+        assert_eq!(result.4, "UDP"); // Protocol
+        assert_eq!(result.5, b"Test"); // Payload
+    }
+
+    #[test]
+    fn test_parse_small_packet() {
+        let packet = vec![0; 10]; // Packet too small to contain headers
+        let result = PcapVTab::parse_packet(&packet).unwrap();
+
+        assert_eq!(result.0, "0.0.0.0"); // Default IP
+        assert_eq!(result.1, "0.0.0.0"); // Default IP
+        assert_eq!(result.2, 0); // Default Port
+        assert_eq!(result.3, 0); // Default Port
+        assert_eq!(result.4, "UNKNOWN"); // Default Protocol
+        assert!(result.5.is_empty()); // Empty Payload
+    }
+
+    #[test]
+    fn test_parse_unknown_protocol() {
+        let mut packet = create_ipv4_tcp_packet();
+        packet[23] = 100; // Change protocol number to unknown value
+        let result = PcapVTab::parse_packet(&packet).unwrap();
+
+        assert_eq!(result.4, "IP(100)"); // Unknown protocol
+    }
+}
