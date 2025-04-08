@@ -3,11 +3,11 @@ extern crate duckdb_loadable_macros;
 extern crate libduckdb_sys;
 extern crate pcap_parser;
 
-use std::mem::ManuallyDrop;
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 
 use duckdb::{
     core::{DataChunkHandle, Inserter, LogicalTypeHandle, LogicalTypeId},
-    vtab::{BindInfo, Free, FunctionInfo, InitInfo, VTab},
+    vtab::{BindInfo, InitInfo, TableFunctionInfo, VTab},
     Connection, Result,
 };
 use duckdb_loadable_macros::duckdb_entrypoint_c_api;
@@ -16,7 +16,6 @@ use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
 use std::{
     error::Error,
-    ffi::{c_char, CStr, CString},
     fs::File,
     io::{Cursor, Read},
 };
@@ -29,40 +28,26 @@ macro_rules! debug_print {
     };
 }
 
-#[repr(C)]
 struct PcapBindData {
-    filepath: *mut c_char,
+    filepath: String,
 }
 
-#[repr(C)]
+struct PcapReaderWrapper {
+    reader: LegacyPcapReader<Box<dyn Read + Send>>,
+}
+
 struct PcapInitData {
-    reader: Option<ManuallyDrop<LegacyPcapReader<Box<dyn Read>>>>,
-    done: bool,
-}
-
-impl Free for PcapBindData {
-    fn free(&mut self) {
-        unsafe {
-            if !self.filepath.is_null() {
-                drop(CString::from_raw(self.filepath));
-            }
-        }
-    }
+    reader: Arc<Mutex<Option<PcapReaderWrapper>>>,
+    done: AtomicBool,
 }
 
 struct PcapVTab;
-
-impl Free for PcapInitData {
-    fn free(&mut self) {
-        self.reader = None;
-    }
-}
 
 impl VTab for PcapVTab {
     type InitData = PcapInitData;
     type BindData = PcapBindData;
 
-    unsafe fn bind(bind: &BindInfo, data: *mut PcapBindData) -> Result<(), Box<dyn Error>> {
+    fn bind(bind: &BindInfo) -> Result<PcapBindData, Box<dyn Error>> {
         bind.add_result_column(
             "timestamp",
             LogicalTypeHandle::from(LogicalTypeId::Timestamp),
@@ -72,27 +57,27 @@ impl VTab for PcapVTab {
         bind.add_result_column("src_port", LogicalTypeHandle::from(LogicalTypeId::Integer));
         bind.add_result_column("dst_port", LogicalTypeHandle::from(LogicalTypeId::Integer));
         bind.add_result_column(
-            "L4 protocol",
+            "protocol",
             LogicalTypeHandle::from(LogicalTypeId::Varchar),
         );
         bind.add_result_column("length", LogicalTypeHandle::from(LogicalTypeId::Integer));
         bind.add_result_column("payload", LogicalTypeHandle::from(LogicalTypeId::Varchar));
 
         let filepath = bind.get_parameter(0).to_string();
-        unsafe {
-            (*data).filepath = CString::new(filepath)?.into_raw();
-        }
-        Ok(())
+        
+        Ok(PcapBindData {
+            filepath,
+        })
     }
 
     // Initialize the VTab
-    unsafe fn init(info: &InitInfo, data: *mut PcapInitData) -> Result<(), Box<dyn Error>> {
+    fn init(info: &InitInfo) -> Result<PcapInitData, Box<dyn Error>> {
         let bind_data = info.get_bind_data::<PcapBindData>();
-        let filepath = unsafe { CStr::from_ptr((*bind_data).filepath).to_str()? };
+        let filepath = unsafe { (*bind_data).filepath.clone() };
 
         debug_print!("Opening file: {}", filepath);
 
-        let reader: Box<dyn Read> =
+        let reader: Box<dyn Read + Send> =
             if filepath.starts_with("http://") || filepath.starts_with("https://") {
                 debug_print!("Using HTTP reader for {}", filepath);
 
@@ -114,136 +99,193 @@ impl VTab for PcapVTab {
                 Box::new(File::open(filepath)?)
             };
 
-        unsafe {
-            (*data).reader = Some(ManuallyDrop::new(
-                LegacyPcapReader::new(65536, reader).expect("PcapReader"),
-            ));
-            (*data).done = false;
-        }
-        Ok(())
+        // Create the pcap reader
+        let pcap_reader = LegacyPcapReader::new(65536, reader).expect("PcapReader");
+        
+        let reader_wrapper = PcapReaderWrapper {
+            reader: pcap_reader,
+        };
+        
+        Ok(PcapInitData {
+            reader: Arc::new(Mutex::new(Some(reader_wrapper))),
+            done: AtomicBool::new(false),
+        })
     }
 
-    unsafe fn func(
-        func: &FunctionInfo,
+    fn func(
+        func: &TableFunctionInfo<PcapVTab>,
         output: &mut DataChunkHandle,
     ) -> Result<(), Box<dyn Error>> {
-        let init_data = func.get_init_data::<PcapInitData>();
+        let init_data = func.get_init_data();
 
-        unsafe {
-            if (*init_data).done {
-                output.set_len(0);
-                return Ok(());
-            }
+        // Check if we're done
+        if init_data.done.load(Ordering::Relaxed) {
+            output.set_len(0);
+            return Ok(());
         }
 
         let mut count = 0;
-
-        // Read packets from the pcap file
-        'read_loop: loop {
-            let next_result = unsafe { (*init_data).reader.as_mut().unwrap().next() };
-
-            // Handle the next packet
-            let (offset, block) = match next_result {
-                Ok(result) => result,
-                Err(PcapError::Incomplete(_)) => {
-                    unsafe {
-                        (*init_data).reader.as_mut().unwrap().refill()?;
-                    }
-                    continue 'read_loop;
-                }
-                Err(PcapError::Eof) => {
-                    unsafe {
-                        (*init_data).done = true;
-                    }
-                    output.set_len(count);
-                    return Ok(());
-                }
-                Err(e) => return Err(Box::new(e)),
+        let mut reached_eof = false;
+        let mut packet_data = None;
+        
+        // First, process a block with careful locking
+        {
+            let mut reader_guard = match init_data.reader.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Err("Failed to lock reader".into()),
             };
-
-            // Process the block
-            match block {
-              
-                // Handle the packet
-                PcapBlockOwned::Legacy(packet) => {
-                    let parsed = Self::parse_packet(&packet.data)?;
-                    let (src_ip, dst_ip, src_port, dst_port, l4_protocol, payload) = parsed;
-                    let timestamp_micros = packet.ts_sec as i64 * 1_000_000 + packet.ts_usec as i64;
-
-                    debug_print!(
-                        "Processing packet: timestamp={}, src={}:{}, dst={}:{}, proto={}, len={}",
-                        timestamp_micros,
-                        src_ip,
-                        src_port,
-                        dst_ip,
-                        dst_port,
-                        l4_protocol,
-                        packet.origlen
-                    );
-
-                    output.flat_vector(0).as_mut_slice::<i64>()[0] = timestamp_micros;
-                    output.flat_vector(1).insert(count, CString::new(src_ip)?);
-                    output.flat_vector(2).insert(count, CString::new(dst_ip)?);
-                    output.flat_vector(3).as_mut_slice::<i32>()[0] = src_port as i32;
-                    output.flat_vector(4).as_mut_slice::<i32>()[0] = dst_port as i32;
-                    output.flat_vector(5).insert(count, CString::new(l4_protocol)?);
-                    output.flat_vector(6).as_mut_slice::<i32>()[0] = packet.origlen as i32;
-
-                    let payload_str = if !payload.is_empty() {
-                        if let Ok(utf8_str) = std::str::from_utf8(&payload) {
-                            if utf8_str
-                                .chars()
-                                .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
-                            {
-                                format!("{}", utf8_str)
-                            } else {
-                                let hex_str: Vec<String> = payload
-                                    .iter()
-                                    .take(32)
-                                    .map(|b| format!("{:02x}", b))
-                                    .collect();
-                                format!(
-                                    "{}{}",
-                                    hex_str.join(" "),
-                                    if payload.len() > 32 { " ..." } else { "" }
-                                )
+            
+            let reader_wrapper = match reader_guard.as_mut() {
+                Some(wrapper) => wrapper,
+                None => return Err("Reader is not initialized".into()),
+            };
+            
+            debug_print!("Attempting to read from PCAP file");
+            
+            // Process in a loop until we find a valid packet or reach EOF
+            'packet_loop: loop {
+                // Try to get a meaningful block
+                let block_result = reader_wrapper.reader.next();
+                
+                match block_result {
+                    Ok((offset, block)) => {
+                        debug_print!("Got a block, examining it");
+                        match block {
+                            // If we have a packet, extract the data from it
+                            PcapBlockOwned::Legacy(packet) => {
+                                debug_print!("Found a Legacy packet");
+                                let ts_micros = packet.ts_sec as i64 * 1_000_000 + packet.ts_usec as i64;
+                                let parsed_result = Self::parse_packet(&packet.data);
+                                
+                                if let Ok((src_ip, dst_ip, src_port, dst_port, l4_protocol, payload)) = parsed_result {
+                                    debug_print!("Successfully parsed packet");
+                                    // Store all the packet info for processing outside the lock
+                                    packet_data = Some((
+                                        ts_micros,
+                                        src_ip,
+                                        dst_ip,
+                                        src_port,
+                                        dst_port, 
+                                        l4_protocol,
+                                        packet.origlen,
+                                        payload
+                                    ));
+                                    
+                                    // Consume the block and exit the loop - we found a valid packet
+                                    reader_wrapper.reader.consume(offset);
+                                    break 'packet_loop;
+                                } else {
+                                    debug_print!("Failed to parse packet");
+                                    // Error parsing packet, just consume and continue
+                                    reader_wrapper.reader.consume(offset);
+                                }
+                            },
+                            PcapBlockOwned::LegacyHeader(header) => {
+                                debug_print!("Found a Legacy header: version={}.{}", 
+                                     header.version_major, header.version_minor);
+                                reader_wrapper.reader.consume(offset);
+                            },
+                            // Skip other blocks
+                            _ => {
+                                debug_print!("Found some other type of block");
+                                reader_wrapper.reader.consume(offset);
                             }
-                        } else {
-                            let hex_str: Vec<String> = payload
-                                .iter()
-                                .take(32)
-                                .map(|b| format!("{:02x}", b))
-                                .collect();
-                            format!(
-                                "{}{}",
-                                hex_str.join(" "),
-                                if payload.len() > 32 { " ..." } else { "" }
-                            )
                         }
-                    } else {
-                        "empty".to_string()
-                    };
-                    output
-                        .flat_vector(7)
-                        .insert(count, CString::new(payload_str)?);
-
-                    count += 1;
-
-                    unsafe {
-                        (*init_data).reader.as_mut().unwrap().consume(offset);
+                    },
+                    Err(PcapError::Incomplete(needed)) => {
+                        debug_print!("Incomplete data, need {} more bytes, trying to refill", needed);
+                        // Need to refill
+                        if let Err(e) = reader_wrapper.reader.refill() {
+                            debug_print!("Failed to refill: {:?}", e);
+                            reached_eof = true;
+                            break 'packet_loop;
+                        } else {
+                            debug_print!("Refilled successfully");
+                        }
+                    },
+                    Err(PcapError::Eof) => {
+                        debug_print!("Reached EOF");
+                        reached_eof = true;
+                        break 'packet_loop;
+                    },
+                    Err(e) => {
+                        debug_print!("Error reading PCAP: {:?}", e);
+                        reached_eof = true;
+                        break 'packet_loop;
                     }
-                    break 'read_loop;
-                }
-
-                // Skip non-packet blocks
-                PcapBlockOwned::LegacyHeader(_) | _ => {
-                    unsafe {
-                        (*init_data).reader.as_mut().unwrap().consume(offset);
-                    }
-                    continue 'read_loop;
                 }
             }
         }
+        
+        // Handle EOF outside the lock
+        if reached_eof {
+            init_data.done.store(true, Ordering::Relaxed);
+            output.set_len(0);
+            return Ok(());
+        }
+        
+        // Process packet data outside the lock
+        if let Some((timestamp_micros, src_ip, dst_ip, src_port, dst_port, l4_protocol, packet_len, payload)) = packet_data {
+            debug_print!(
+                "Processing packet: timestamp={}, src={}:{}, dst={}:{}, proto={}, len={}",
+                timestamp_micros,
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                l4_protocol,
+                packet_len
+            );
+
+            // Fill the output vectors with packet data
+            output.flat_vector(0).as_mut_slice::<i64>()[count] = timestamp_micros;
+            output.flat_vector(1).insert(count, src_ip.as_str());
+            output.flat_vector(2).insert(count, dst_ip.as_str());
+            output.flat_vector(3).as_mut_slice::<i32>()[count] = src_port as i32;
+            output.flat_vector(4).as_mut_slice::<i32>()[count] = dst_port as i32;
+            output.flat_vector(5).insert(count, l4_protocol.as_str());
+            output.flat_vector(6).as_mut_slice::<i32>()[count] = packet_len as i32;
+
+            // Process the payload for display
+            let payload_str = if !payload.is_empty() {
+                if let Ok(utf8_str) = std::str::from_utf8(&payload) {
+                    if utf8_str
+                        .chars()
+                        .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+                    {
+                        format!("{}", utf8_str)
+                    } else {
+                        let hex_str: Vec<String> = payload
+                            .iter()
+                            .take(32)
+                            .map(|b| format!("{:02x}", b))
+                            .collect();
+                        format!(
+                            "{}{}",
+                            hex_str.join(" "),
+                            if payload.len() > 32 { " ..." } else { "" }
+                        )
+                    }
+                } else {
+                    let hex_str: Vec<String> = payload
+                        .iter()
+                        .take(32)
+                        .map(|b| format!("{:02x}", b))
+                        .collect();
+                    format!(
+                        "{}{}",
+                        hex_str.join(" "),
+                        if payload.len() > 32 { " ..." } else { "" }
+                    )
+                }
+            } else {
+                "empty".to_string()
+            };
+            output.flat_vector(7).insert(count, payload_str.as_str());
+
+            count += 1;
+        }
+        
         // Set the number of rows in the output
         output.set_len(count);
         Ok(())
@@ -390,10 +432,14 @@ impl PcapVTab {
     }
 }
 
-#[duckdb_entrypoint_c_api(ext_name = "pcap_reader", min_duckdb_version = "v0.0.1")]
-pub unsafe fn extension_entrypoint(con: Connection) -> Result<(), Box<dyn Error>> {
+#[duckdb_entrypoint_c_api(ext_name = "pcap_reader", min_duckdb_version = "v1.2.0")]
+pub fn extension_entrypoint(con: Connection) -> Result<(), Box<dyn Error>> {
+    // Print a simple load message (could be controlled with a verbose flag if needed)
+    debug_print!("Loading PCAP reader extension");
+    
     con.register_table_function::<PcapVTab>("pcap_reader")
         .expect("Failed to register pcap_reader function");
+    
     Ok(())
 }
 
