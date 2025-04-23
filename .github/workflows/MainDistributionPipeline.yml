@@ -18,7 +18,7 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.2.0
     with:
-      duckdb_version: v1.2.0
+      duckdb_version: v1.2.2
       ci_tools_version: main
       extension_name: pcap_reader
       extra_toolchains: rust;python3
